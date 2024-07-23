@@ -12,28 +12,55 @@ contract TokenDAO is Ownable(msg.sender) {
         mapping(address => bool) voters;
     }
 
+    struct Role {
+        string name;
+        mapping(address => bool) members;
+    }
+
     IERC20 public token;
     mapping(uint => Proposal) public proposals;
     uint public nextProposalId;
-    mapping(address => bool) public members;
     uint public proposalThreshold;
 
-    modifier onlyMember() {
-        require(members[msg.sender], "Only DAO members can call this function");
+    mapping(bytes32 => Role) private roles;
+    bytes32 public constant ADMIN_ROLE = keccak256("ADMIN");
+    bytes32 public constant MEMBER_ROLE = keccak256("MEMBER");
+
+    modifier onlyRole(bytes32 role) {
+        require(roles[role].members[msg.sender], "Access denied: insufficient role");
         _;
     }
 
     constructor(address tokenAddress, uint _proposalThreshold) {
         token = IERC20(tokenAddress);
-        members[msg.sender] = true;
         proposalThreshold = _proposalThreshold;
+        
+        // Add contract deployer as the first admin and member
+        _grantRole(ADMIN_ROLE, msg.sender);
+        _grantRole(MEMBER_ROLE, msg.sender);
     }
 
-    function addMember(address member) external onlyOwner {
-        members[member] = true;
+    function _grantRole(bytes32 role, address account) internal {
+        roles[role].members[account] = true;
     }
 
-    function createProposal(string calldata description) external onlyMember {
+    function grantRole(bytes32 role, address account) external onlyRole(ADMIN_ROLE) {
+        _grantRole(role, account);
+    }
+
+    function revokeRole(bytes32 role, address account) external onlyRole(ADMIN_ROLE) {
+        roles[role].members[account] = false;
+    }
+
+    function hasRole(bytes32 role, address account) external view returns (bool) {
+        return roles[role].members[account];
+    }
+
+    function addMember(address member) external onlyRole(ADMIN_ROLE) {
+        _grantRole(MEMBER_ROLE, member);
+    }
+
+    function createProposal(string calldata description) external onlyRole(MEMBER_ROLE) {
         require(token.balanceOf(msg.sender) >= proposalThreshold, "Insufficient token balance to create proposal");
         Proposal storage newProposal = proposals[nextProposalId];
         newProposal.id = nextProposalId;
@@ -41,7 +68,7 @@ contract TokenDAO is Ownable(msg.sender) {
         nextProposalId++;
     }
 
-    function vote(uint proposalId) external onlyMember {
+    function vote(uint proposalId) external onlyRole(MEMBER_ROLE) {
         Proposal storage proposal = proposals[proposalId];
         require(!proposal.voters[msg.sender], "Already voted on this proposal");
 
@@ -55,5 +82,20 @@ contract TokenDAO is Ownable(msg.sender) {
     function getProposal(uint proposalId) external view returns (uint, string memory, uint) {
         Proposal storage proposal = proposals[proposalId];
         return (proposal.id, proposal.description, proposal.voteCount);
+    }
+
+    function getWinningProposal() external view returns (uint, string memory, uint) {
+        uint winningProposalId;
+        uint highestVoteCount = 0;
+        
+        for (uint i = 0; i < nextProposalId; i++) {
+            if (proposals[i].voteCount > highestVoteCount) {
+                highestVoteCount = proposals[i].voteCount;
+                winningProposalId = i;
+            }
+        }
+
+        Proposal storage winningProposal = proposals[winningProposalId];
+        return (winningProposal.id, winningProposal.description, winningProposal.voteCount);
     }
 }
